@@ -1,0 +1,13 @@
+{
+  "name": "planner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "三层展开式日程规划：板块 / 事项 / 子任务",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
