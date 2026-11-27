@@ -1,0 +1,51 @@
+.shell { max-width: 1280px; margin: 0 auto; padding: 0 40px; }
+
+.topbar { height: 68px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: baseline; gap: 14px; color: var(--text); text-decoration: none; }
+.brand-en { font-family: var(--serif); font-style: italic; font-size: 27px; line-height: 1; letter-spacing: -.01em; }
+.brand-cn { font-size: 12px; color: var(--text-3); letter-spacing: .26em; }
+.top-actions { display: flex; align-items: center; gap: 4px; }
+.sync {
+  display: inline-flex; align-items: center; gap: 8px; margin-right: 14px;
+  font-size: 12px; letter-spacing: .06em; color: var(--text-3);
+}
+.sync i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.sync.on i { background: var(--c-emerald); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-emerald) 24%, transparent); }
+
+.layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) 404px; gap: 56px;
+  align-items: start; padding: 48px 0 120px;
+}
+.side { position: sticky; top: 24px; }
+
+.intro { display: flex; justify-content: space-between; align-items: flex-end; gap: 28px; padding-bottom: 36px; }
+.eyebrow { margin-bottom: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-3); }
+.intro h1 { font-size: 46px; font-weight: 300; letter-spacing: -.02em; line-height: 1.05; }
+
+.stats { display: flex; }
+.stat { padding: 0 22px; border-left: 1px solid var(--line); }
+.stat:first-child { padding-left: 0; border-left: 0; }
+.stat:last-child { padding-right: 0; }
+.stat b { display: block; font-family: var(--serif); font-weight: 400; font-size: 40px; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat span { display: block; margin-top: 8px; font-size: 12px; letter-spacing: .08em; color: var(--text-3); }
+.stat.hot b { color: var(--hot); }
+
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.section-head h2 { font-size: 12px; letter-spacing: .2em; color: var(--text-3); }
+
+@media (max-width: 1120px) {
+  .shell { padding: 0 28px; }
+  .layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 36px; }
+}
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 32px; padding-top: 28px; }
+  .side { position: static; }
+  .intro { flex-direction: column; align-items: flex-start; gap: 22px; }
+  .intro h1 { font-size: 38px; }
+}
+@media (max-width: 560px) {
+  .shell { padding: 0 16px; }
+  .brand-cn, .sync { display: none; }
+  .stat { padding: 0 16px; }
+  .stat b { font-size: 34px; }
+}

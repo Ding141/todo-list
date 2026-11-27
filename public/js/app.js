@@ -1,312 +1,206 @@
 (function () {
-  const { store, esc, icon, PALETTE, EMOJIS, hex, dueInfo, longDate, greeting, toast, uid, PRIO } = App;
+  const { store, calendar, render: R, modals, icon, cvar, uid, toast } = App;
 
-  const grid = document.getElementById('boardGrid');
+  const boardsEl = document.getElementById('boards');
   const openBoards = new Set();
   const openItems = new Set();
+  let hovered = null; // {b, i, s} of the subtask the pointer / focus is on
 
-  /* ---------------- rendering ---------------- */
+  /* ---------- render ---------- */
 
-  function progressOf(board) {
-    const subs = board.items.flatMap((i) => i.subtasks);
-    const total = board.items.length + subs.length;
-    const done = board.items.filter((i) => i.done).length + subs.filter((s) => s.done).length;
-    return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+  function snapshotDrafts() {
+    const drafts = new Map();
+    boardsEl.querySelectorAll('form.add-sub').forEach((f) => {
+      const vals = ['title', 'start', 'end'].map((n) => f.elements[n].value);
+      if (vals.some(Boolean)) drafts.set(f.closest('.item').dataset.i, vals);
+    });
+    const a = document.activeElement;
+    const focusItem = a && a.closest && a.closest('form.add-sub') ? a.closest('.item').dataset.i : null;
+    return { drafts, focusItem, focusName: focusItem ? a.name : null };
   }
 
-  function renderStats() {
-    const items = store.data.boards.flatMap((b) => b.items);
-    const open = items.filter((i) => !i.done);
-    const overdue = open.filter((i) => i.due && dueInfo(i.due).tone === 'overdue').length;
-    const today = open.filter((i) => i.due && dueInfo(i.due).n === 0).length;
-    document.getElementById('stats').innerHTML = [
-      ['板块', store.data.boards.length, ''],
-      ['进行中', open.length, ''],
-      ['今天', today, today ? 'ok' : ''],
-      ['逾期', overdue, overdue ? 'bad' : ''],
-    ].map(([k, v, cls]) => `<div class="stat ${cls}"><b>${v}</b><span>${k}</span></div>`).join('');
-  }
+  function render(focusTitleOf) {
+    const snap = snapshotDrafts();
+    const d = store.data;
+    boardsEl.innerHTML = d.boards.map((b, i) => R.board(b, i, openBoards, openItems)).join('') + R.addBoard();
+    document.getElementById('stats').innerHTML = R.stats(d);
 
-  function chipHTML(item) {
-    const chips = [];
-    if (item.due) {
-      const d = dueInfo(item.due, item.done);
-      chips.push(`<span class="chip due-${d.tone}">${icon('calendar', 13)} ${esc(d.label)}</span>`);
+    snap.drafts.forEach((vals, iid) => {
+      const f = boardsEl.querySelector(`.item[data-i="${CSS.escape(iid)}"] form.add-sub`);
+      if (f) ['title', 'start', 'end'].forEach((n, k) => { f.elements[n].value = vals[k]; });
+    });
+    const focusId = focusTitleOf || snap.focusItem;
+    if (focusId) {
+      const f = boardsEl.querySelector(`.item[data-i="${CSS.escape(focusId)}"] form.add-sub`);
+      if (f) f.elements[focusTitleOf ? 'title' : snap.focusName || 'title'].focus();
     }
-    if (item.prio && item.prio !== 'low') {
-      chips.push(`<span class="chip prio-${item.prio}">${esc(PRIO[item.prio])}</span>`);
-    }
-    const n = item.subtasks.length;
-    if (n) {
-      const dn = item.subtasks.filter((s) => s.done).length;
-      chips.push(`<span class="chip">${dn}/${n}</span>`);
-    }
-    return chips.join('');
+
+    calendar.setData(d);
+    refreshHover();
   }
 
-  function subHTML(b, it, s) {
-    return `<div class="sub ${s.done ? 'done' : ''}">
-      <button class="check sm ${s.done ? 'on' : ''}" data-act="toggle-sub" data-b="${b.id}" data-i="${it.id}" data-s="${s.id}">${icon('check', 12)}</button>
-      <span class="sub-title">${esc(s.title)}</span>
-      <button class="icon-btn" data-act="del-sub" data-b="${b.id}" data-i="${it.id}" data-s="${s.id}" title="删除">${icon('x', 14)}</button>
-    </div>`;
+  /* ---------- calendar preview on hover ---------- */
+
+  function previewOf(h) {
+    const b = store.board(h.b);
+    const it = store.item(h.b, h.i);
+    const s = store.sub(h.b, h.i, h.s);
+    if (!b || !it || !s) return null;
+    return { title: s.title, path: `${b.title}  /  ${it.title}`, color: cvar(b.color), start: s.start, end: s.end };
   }
 
-  function itemHTML(b, it) {
-    const open = openItems.has(it.id);
-    return `<article class="item ${it.done ? 'done' : ''} ${open ? 'open' : ''}" style="--mark:${hex(b.color)}">
-      <div class="item-head" data-act="toggle-item" data-b="${b.id}" data-i="${it.id}">
-        <button class="check ${it.done ? 'on' : ''}" data-act="toggle-done" data-b="${b.id}" data-i="${it.id}">${icon('check', 14)}</button>
-        <div class="item-text">
-          <div class="item-title">${esc(it.title)}</div>
-          ${it.note ? `<div class="item-note">${esc(it.note)}</div>` : ''}
-        </div>
-        <div class="chips">${chipHTML(it)}</div>
-        <div class="item-tools">
-          <button class="icon-btn" data-act="edit-item" data-b="${b.id}" data-i="${it.id}" title="编辑">${icon('edit', 15)}</button>
-          <button class="icon-btn" data-act="del-item" data-b="${b.id}" data-i="${it.id}" title="删除">${icon('trash', 15)}</button>
-          <span class="chev">${icon('chevron', 16)}</span>
-        </div>
-      </div>
-      <div class="item-body"><div class="item-body-inner"><div class="sub-list">
-        ${it.subtasks.map((s) => subHTML(b, it, s)).join('') || '<div class="empty-hint">还没有子任务</div>'}
-        <form class="add-row" data-act="add-sub" data-b="${b.id}" data-i="${it.id}">
-          <input name="title" placeholder="添加子任务，回车确认" maxlength="120" />
-        </form>
-      </div></div></div>
-    </article>`;
+  function refreshHover() {
+    const p = hovered && previewOf(hovered);
+    if (p) calendar.show(p); else { hovered = null; calendar.hide(); }
   }
 
-  function boardHTML(b) {
-    const open = openBoards.has(b.id);
-    const p = progressOf(b);
-    return `<section class="board ${open ? 'open' : ''}" style="--mark:${hex(b.color)}">
-      <div class="board-head" data-act="toggle-board" data-b="${b.id}">
-        <div class="board-mark">${esc(b.emoji || '📌')}</div>
-        <div class="board-text">
-          <h3>${esc(b.title)}</h3>
-          <p>${esc(b.desc || (b.items.length ? b.items.length + ' 个事项' : '还没有事项'))}</p>
-        </div>
-        <div class="board-meta">
-          <div class="progress">
-            <div class="progress-bar"><i style="width:${p.pct}%"></i></div>
-            <div class="progress-label">${p.done}/${p.total} · ${p.pct}%</div>
-          </div>
-          <button class="icon-btn" data-act="edit-board" data-b="${b.id}" title="编辑板块">${icon('edit', 15)}</button>
-          <span class="chev">${icon('chevron', 18)}</span>
-        </div>
-      </div>
-      <div class="board-body"><div class="board-body-inner"><div class="board-body-pad">
-        ${b.items.map((it) => itemHTML(b, it)).join('') || '<div class="empty-hint">这个板块还是空的，添加第一个事项吧。</div>'}
-        <div><button class="btn btn-sm" data-act="add-item" data-b="${b.id}">${icon('plus', 14)} 添加事项</button></div>
-      </div></div></div>
-    </section>`;
+  function setHover(el) {
+    const row = el && el.closest ? el.closest('.sub') : null;
+    const next = row ? { b: row.dataset.b, i: row.dataset.i, s: row.dataset.s } : null;
+    if ((next && hovered && next.s === hovered.s) || (!next && !hovered)) return;
+    hovered = next;
+    refreshHover();
   }
 
-  function render() {
-    const focus = document.activeElement;
-    const keep = focus && focus.closest('.add-row') ? {
-      b: focus.closest('[data-b]').dataset.b,
-      i: focus.closest('[data-i]').dataset.i,
-      val: focus.value,
-    } : null;
+  boardsEl.addEventListener('mouseover', (e) => setHover(e.target));
+  boardsEl.addEventListener('mouseleave', () => setHover(null));
+  boardsEl.addEventListener('focusin', (e) => setHover(e.target));
+  boardsEl.addEventListener('focusout', (e) => { if (!boardsEl.contains(e.relatedTarget)) setHover(null); });
 
-    grid.innerHTML = store.data.boards.map(boardHTML).join('') +
-      `<button class="btn btn-ghost" data-act="add-board" style="align-self:flex-start">${icon('plus', 15)} 新建板块</button>`;
-    renderStats();
+  /* ---------- actions ---------- */
 
-    if (keep) {
-      const f = grid.querySelector(`form[data-i="${keep.i}"] input`);
-      if (f) { f.value = keep.val; f.focus(); f.setSelectionRange(keep.val.length, keep.val.length); }
-    }
-  }
-
-  /* ---------------- actions ---------------- */
-
-  grid.addEventListener('click', (e) => {
+  boardsEl.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
-    if (!el) return;
-    const { act, b, i, s } = el.dataset;
-
-    // Toggle the class in place (no re-render) so the expand animation plays.
-    if (act === 'toggle-board') {
-      openBoards.has(b) ? openBoards.delete(b) : openBoards.add(b);
-      el.closest('.board').classList.toggle('open', openBoards.has(b));
-    } else if (act === 'toggle-item') {
-      openItems.has(i) ? openItems.delete(i) : openItems.add(i);
-      el.closest('.item').classList.toggle('open', openItems.has(i));
+    if (!el) {
+      const row = e.target.closest('.sub'); // touch devices have no hover: a tap previews instead
+      if (row) setHover(row);
+      return;
     }
-    else if (act === 'toggle-done') {
+    const act = el.dataset.act;
+    const at = (sel, key) => { const n = el.closest(sel); return n ? n.dataset[key] : undefined; };
+    const bid = at('[data-b]', 'b');
+    const iid = at('[data-i]', 'i');
+    const sid = at('[data-s]', 's');
+
+    // Accordion rows animate by flipping a class in place; everything else re-renders.
+    if (act === 'toggle-board') {
+      openBoards.has(bid) ? openBoards.delete(bid) : openBoards.add(bid);
+      el.closest('.board').classList.toggle('open', openBoards.has(bid));
+    } else if (act === 'toggle-item') {
+      openItems.has(iid) ? openItems.delete(iid) : openItems.add(iid);
+      el.closest('.item').classList.toggle('open', openItems.has(iid));
+    } else if (act === 'toggle-done') {
       e.stopPropagation();
-      const it = store.item(b, i); it.done = !it.done; store.save(); render();
+      const it = store.item(bid, iid);
+      it.done = !it.done;
+      if (it.done) it.subtasks.forEach((s) => { s.done = true; }); // finishing an item finishes its subtasks
+      store.save(); render();
     } else if (act === 'toggle-sub') {
-      const it = store.item(b, i);
-      const sub = it.subtasks.find((x) => x.id === s);
-      sub.done = !sub.done;
-      if (it.subtasks.length && it.subtasks.every((x) => x.done)) it.done = true;
+      const it = store.item(bid, iid);
+      const s = store.sub(bid, iid, sid);
+      s.done = !s.done;
+      it.done = it.subtasks.every((x) => x.done);
       store.save(); render();
     } else if (act === 'del-sub') {
-      const it = store.item(b, i);
-      it.subtasks = it.subtasks.filter((x) => x.id !== s);
+      const it = store.item(bid, iid);
+      it.subtasks = it.subtasks.filter((x) => x.id !== sid);
+      hovered = null;
       store.save(); render();
+    } else if (act === 'edit-sub') {
+      const s = store.sub(bid, iid, sid);
+      modals.sub(s, (v) => { Object.assign(s, v); store.save(); render(); }, () => {
+        const it = store.item(bid, iid);
+        it.subtasks = it.subtasks.filter((x) => x.id !== sid);
+        hovered = null; store.save(); render(); return true;
+      });
     } else if (act === 'del-item') {
       e.stopPropagation();
-      const board = store.board(b);
-      const it = store.item(b, i);
-      if (confirm(`删除事项「${it.title}」？`)) {
-        board.items = board.items.filter((x) => x.id !== i);
-        store.save(); render();
+      const b = store.board(bid);
+      const it = store.item(bid, iid);
+      if (confirm(`删除事项「${it.title}」及其子任务？`)) {
+        b.items = b.items.filter((x) => x.id !== iid);
+        hovered = null; store.save(); render();
       }
-    } else if (act === 'edit-board') { e.stopPropagation(); openBoardModal(store.board(b)); }
-    else if (act === 'edit-item') { e.stopPropagation(); openItemModal(b, store.item(b, i)); }
-    else if (act === 'add-item') { openItemModal(b, null); }
-    else if (act === 'add-board') { openBoardModal(null); }
+    } else if (act === 'edit-item') {
+      e.stopPropagation();
+      const it = store.item(bid, iid);
+      modals.item(it, (v) => { Object.assign(it, v); store.save(); render(); }, () => {
+        if (!confirm(`删除事项「${it.title}」及其子任务？`)) return false;
+        const b = store.board(bid);
+        b.items = b.items.filter((x) => x.id !== iid);
+        hovered = null; store.save(); render(); return true;
+      });
+    } else if (act === 'add-item') {
+      modals.item(null, (v) => {
+        const it = { id: uid(), note: '', subtasks: [], done: false, ...v };
+        store.board(bid).items.push(it);
+        openBoards.add(bid); openItems.add(it.id);
+        store.save(); render();
+      });
+    } else if (act === 'edit-board') {
+      e.stopPropagation();
+      openBoardModal(store.board(bid));
+    } else if (act === 'add-board') {
+      openBoardModal(null);
+    }
   });
 
-  grid.addEventListener('submit', (e) => {
-    const form = e.target.closest('form[data-act="add-sub"]');
-    if (!form) return;
+  function openBoardModal(board) {
+    modals.board(board, (v) => {
+      if (board) Object.assign(board, v);
+      else {
+        const nb = { id: uid(), items: [], ...v };
+        store.data.boards.push(nb);
+        openBoards.add(nb.id);
+      }
+      store.save(); render();
+    }, () => {
+      if (!confirm(`删除板块「${board.title}」及其全部事项？`)) return false;
+      store.data.boards = store.data.boards.filter((x) => x.id !== board.id);
+      hovered = null; store.save(); render();
+      return true;
+    });
+  }
+
+  boardsEl.addEventListener('submit', (e) => {
+    const f = e.target.closest('form.add-sub');
+    if (!f) return;
     e.preventDefault();
-    const input = form.elements.title;
-    const title = input.value.trim();
-    if (!title) return;
-    store.item(form.dataset.b, form.dataset.i).subtasks.push({ id: uid(), title, done: false });
-    input.value = '';
-    store.save(); render();
+    const title = f.elements.title.value.trim();
+    if (!title) { f.elements.title.focus(); return; }
+    const item = f.closest('.item');
+    const bid = item.dataset.b;
+    const iid = item.dataset.i;
+    store.item(bid, iid).subtasks.push(modals.newSub({ title, start: f.elements.start.value, end: f.elements.end.value }));
+    store.item(bid, iid).done = false;
+    f.reset(); // clear the draft so render() doesn't restore it
+    store.save(); render(iid);
   });
 
   document.getElementById('addBoardBtn').addEventListener('click', () => openBoardModal(null));
 
-  /* ---------------- modal ---------------- */
+  /* ---------- top bar ---------- */
 
-  const modal = document.getElementById('modal');
-  const form = document.getElementById('modalForm');
-
-  function swatchHTML(selected) {
-    return `<div class="swatches">${PALETTE.map((p) =>
-      `<button type="button" class="swatch ${p.id === selected ? 'on' : ''}" style="--c:${p.hex}" data-val="${p.id}"></button>`).join('')}</div>`;
-  }
-  function emojiHTML(selected) {
-    return `<div class="emojis">${EMOJIS.map((e) =>
-      `<button type="button" class="emoji-opt ${e === selected ? 'on' : ''}" data-val="${e}">${e}</button>`).join('')}</div>`;
-  }
-
-  function openBoardModal(board) {
-    const creating = !board;
-    form.innerHTML = `
-      <h3>${creating ? '新建板块' : '编辑板块'}</h3>
-      <div class="field"><label>名称</label><input name="title" maxlength="40" required value="${esc(board ? board.title : '')}" placeholder="例如：课程" /></div>
-      <div class="field"><label>一句话描述</label><input name="desc" maxlength="80" value="${esc(board ? board.desc : '')}" placeholder="可选" /></div>
-      <div class="field"><label>图标</label>${emojiHTML(board ? board.emoji : '📚')}</div>
-      <div class="field"><label>颜色</label>${swatchHTML(board ? board.color : 'indigo')}</div>
-      <input type="hidden" name="emoji" value="${board ? board.emoji : '📚'}" />
-      <input type="hidden" name="color" value="${board ? board.color : 'indigo'}" />
-      <div class="modal-actions">
-        ${creating ? '<span></span>' : `<button type="button" class="btn btn-ghost btn-danger" data-del>删除板块</button>`}
-        <div class="right"><button type="button" class="btn" data-close>取消</button><button class="btn btn-primary">${creating ? '创建' : '保存'}</button></div>
-      </div>`;
-    form.onsubmit = (e) => {
-      e.preventDefault();
-      const v = Object.fromEntries(new FormData(form));
-      if (!v.title.trim()) return;
-      if (creating) {
-        const nb = { id: uid(), title: v.title.trim(), desc: v.desc.trim(), emoji: v.emoji, color: v.color, items: [] };
-        store.data.boards.push(nb);
-        openBoards.add(nb.id);
-      } else {
-        Object.assign(board, { title: v.title.trim(), desc: v.desc.trim(), emoji: v.emoji, color: v.color });
-      }
-      store.save(); closeModal(); render();
-    };
-    const del = form.querySelector('[data-del]');
-    if (del) del.onclick = () => {
-      if (confirm(`删除板块「${board.title}」及其全部事项？`)) {
-        store.data.boards = store.data.boards.filter((x) => x.id !== board.id);
-        store.save(); closeModal(); render();
-      }
-    };
-    showModal();
-  }
-
-  function openItemModal(bid, item) {
-    const creating = !item;
-    const today = App.ymd(new Date());
-    form.innerHTML = `
-      <h3>${creating ? '新建事项' : '编辑事项'}</h3>
-      <div class="field"><label>事项</label><input name="title" maxlength="120" required value="${esc(item ? item.title : '')}" placeholder="要做的事" /></div>
-      <div class="field"><label>备注</label><textarea name="note" maxlength="500" placeholder="可选">${esc(item ? item.note : '')}</textarea></div>
-      <div class="row2">
-        <div class="field"><label>截止日期</label><input type="date" name="due" value="${item && item.due ? item.due : ''}" /></div>
-        <div class="field"><label>优先级</label>
-          <select name="prio">
-            ${['low', 'mid', 'high'].map((p) => `<option value="${p}" ${item && item.prio === p ? 'selected' : ''}>${PRIO[p]}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <span></span>
-        <div class="right"><button type="button" class="btn" data-close>取消</button><button class="btn btn-primary">${creating ? '添加' : '保存'}</button></div>
-      </div>`;
-    form.onsubmit = (e) => {
-      e.preventDefault();
-      const v = Object.fromEntries(new FormData(form));
-      if (!v.title.trim()) return;
-      if (creating) {
-        store.board(bid).items.push({ id: uid(), title: v.title.trim(), note: v.note.trim(), due: v.due, prio: v.prio, done: false, subtasks: [] });
-        openBoards.add(bid);
-      } else {
-        Object.assign(item, { title: v.title.trim(), note: v.note.trim(), due: v.due, prio: v.prio });
-      }
-      store.save(); closeModal(); render();
-    };
-    showModal();
-  }
-
-  function showModal() {
-    modal.hidden = false;
-    form.querySelector('input,textarea')?.focus();
-  }
-  function closeModal() { modal.hidden = true; form.innerHTML = ''; }
-  modal.addEventListener('click', (e) => { if (e.target === modal || e.target.closest('[data-close]')) closeModal(); });
-  form.addEventListener('click', (e) => {
-    const sw = e.target.closest('.swatch, .emoji-opt');
-    if (!sw) return;
-    sw.parentElement.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
-    sw.classList.add('on');
-    form.elements[sw.classList.contains('swatch') ? 'color' : 'emoji'].value = sw.dataset.val;
-  });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
-
-  /* ---------------- top bar ---------------- */
-
-  const now = new Date();
-  document.getElementById('heroDate').textContent = longDate(now);
-  document.getElementById('heroTitle').textContent = greeting(now);
-
-  document.getElementById('addBoardBtn').innerHTML = `${icon('plus', 15)} 新建板块`;
-  document.getElementById('exportBtn').innerHTML = icon('download', 16);
-  document.getElementById('importBtn').innerHTML = icon('upload', 16);
+  document.getElementById('addBoardBtn').innerHTML = `${icon('plus', 14)} 新建板块`;
+  document.getElementById('exportBtn').innerHTML = icon('download');
+  document.getElementById('importBtn').innerHTML = icon('upload');
   const themeBtn = document.getElementById('themeBtn');
-
-  function syncThemeIcon() {
-    const dark = document.documentElement.dataset.theme === 'dark';
-    themeBtn.innerHTML = icon(dark ? 'sun' : 'moon', 16);
-  }
+  const syncIcon = () => { themeBtn.innerHTML = icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'); };
   themeBtn.addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('planner-theme', next); } catch (e) {}
-    syncThemeIcon();
+    try { localStorage.setItem('planner-theme', next); } catch (_) {}
+    syncIcon();
   });
-  syncThemeIcon();
+  syncIcon();
 
   document.getElementById('exportBtn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(store.data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `planner-${App.ymd(new Date())}.json`;
+    a.download = `planner-${App.today()}.json`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
   const importFile = document.getElementById('importFile');
@@ -315,20 +209,28 @@
     const file = importFile.files[0];
     importFile.value = '';
     if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      if (!confirm('导入会覆盖当前全部数据，继续？')) return;
-      if (!store.replace(data)) throw new Error('格式不对');
-      toast('已导入');
-      render();
-    } catch (e) { toast('导入失败：文件不是有效的规划数据'); }
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (_) { return toast('导入失败：不是有效的 JSON'); }
+    if (!confirm('导入会覆盖当前全部数据，继续？')) return;
+    if (!store.replace(data)) return toast('导入失败：数据结构不符合预期');
+    hovered = null; render(); toast('已导入');
   });
 
-  /* ---------------- boot ---------------- */
+  /* ---------- boot ---------- */
+
+  const now = new Date();
+  document.getElementById('eyebrow').textContent = App.eyebrow(now);
+  document.getElementById('greeting').textContent = App.greeting(now);
+  calendar.mount(document.getElementById('cal'));
 
   store.load().then(() => {
-    document.getElementById('syncBadge').textContent = store.mode === 'server' ? '已连接服务器' : '仅本机浏览器';
+    const server = store.mode === 'server';
+    document.getElementById('sync').classList.toggle('on', server);
+    document.getElementById('syncText').textContent = server ? '已同步到服务器' : '仅本机浏览器';
     if (store.data.boards[0]) openBoards.add(store.data.boards[0].id);
+    const first = store.data.boards[0] && store.data.boards[0].items[0];
+    if (first) openItems.add(first.id);
     render();
+    setTimeout(() => boardsEl.classList.remove('boot'), 900);
   });
 })();
